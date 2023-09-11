@@ -1,0 +1,131 @@
+---
+- name: Install and Configure Decidim
+  hosts: localhost  # Target the local host on the EC2 instance
+  become: yes
+  vars:
+    home_directory: /home/ubuntu  # Replace with your username
+    username: ubuntu  # Replace with your username
+    become_user: ubuntu  # Replace with the desired user for 'become_user'
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - build-essential
+        - curl
+        - git
+        - libssl-dev
+        - zlib1g-dev
+        - postgresql
+        - libpq-dev
+        - ca-certificates
+        - imagemagick
+
+    - name: Clone rbenv from GitHub
+      git:
+        repo: https://github.com/rbenv/rbenv.git
+        dest: "{{ home_directory }}/.rbenv"
+      become_user: "{{ username }}"
+
+    - name: Configure rbenv in ~/.bashrc
+      lineinfile:
+        path: "{{ home_directory }}/.bashrc"
+        line: "{{ item }}"
+      loop:
+        - 'export PATH="{{ home_directory }}/.rbenv/bin:$PATH"'
+        - 'eval "$(rbenv init -)"'
+
+    - name: Reload ~/.bashrc
+      shell: source "{{ home_directory }}/.bashrc"
+
+    - name: Install ruby-build as an rbenv plugin
+      git:
+        repo: https://github.com/rbenv/ruby-build.git
+        dest: "{{ home_directory }}/.rbenv/plugins/ruby-build"
+      become_user: "{{ username }}"
+
+    - name: Install Ruby 3.0.2 using rbenv
+      shell: rbenv install 3.0.2
+      become_user: "{{ username }}"
+
+    - name: Set global Ruby version to 3.0.2
+      shell: rbenv global 3.0.2
+      become_user: "{{ username }}"
+
+    - name: Create PostgreSQL user
+      become_user: postgres
+      become_method: sudo
+      postgresql_user:
+        db: decidim_app
+        name: decidim_app
+        password: root@123
+        priv: "SUPERUSER,CREATEDB,NOCREATEROLE"
+
+    - name: Add Node.js repository
+      shell: >
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key |
+        gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
+      become: yes
+
+    - name: Add Node.js repository to sources.list.d
+      shell: >
+        echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x focal main" |
+        tee /etc/apt/sources.list.d/nodesource.list
+      become: yes
+
+    - name: Update apt cache after adding Node.js repository
+      apt:
+        update_cache: yes
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Install Decidim gem
+      gem:
+        name: decidim
+        state: latest
+
+    - name: Create Decidim application
+      command: decidim decidim_application
+      args:
+        chdir: "{{ home_directory }}/decidim_application"
+      environment:
+        RAILS_ENV: development
+        HOME: "{{ home_directory }}"
+      become_user: "{{ username }}"
+
+    - name: Configure the database
+      copy:
+        content: |
+          DATABASE_HOST=localhost
+          DATABASE_USERNAME=decidim_app
+          DATABASE_PASSWORD=root@123
+        dest: "{{ home_directory }}/decidim_application/.rbenv-vars"
+      environment:
+        HOME: "{{ home_directory }}"
+      become_user: "{{ username }}"
+
+    - name: Initialize the app for local development
+      command: bin/rails db:create db:migrate db:seed
+      args:
+        chdir: "{{ home_directory }}/decidim_application"
+      environment:
+        RAILS_ENV: development
+        HOME: "{{ home_directory }}"
+      become_user: "{{ username }}"
+
+    - name: Start the web server
+      command: bin/rails s -b 0.0.0.0
+      args:
+        chdir: "{{ home_directory }}/decidim_application"
+      environment:
+        RAILS_ENV: development
+        HOME: "{{ home_directory }}"
+      become_user: "{{ username }}"
